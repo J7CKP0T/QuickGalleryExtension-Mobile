@@ -10,19 +10,33 @@
     let galleryButton = null;
     let galleryModal = null;
     let currentImages = [];
+    let context = null;
+    let eventSource = null;
 
     /**
      * Initialize the extension
      */
+    jQuery(async () => {
+        // Wait for SillyTavern to be ready
+        while (!window.SillyTavern || !window.SillyTavern.getContext) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        await init();
+    });
+
     async function init() {
         console.log('[Quick Gallery] Initializing extension');
         
-        // Wait for DOM to be ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', setupExtension);
-        } else {
-            setupExtension();
-        }
+        // Get SillyTavern context
+        context = SillyTavern.getContext();
+        eventSource = context.eventSource;
+        
+        // Setup extension UI
+        setupExtension();
+        registerEventListeners();
+        
+        console.log('[Quick Gallery] Extension initialized successfully');
     }
 
     /**
@@ -31,8 +45,6 @@
     function setupExtension() {
         createGalleryButton();
         createGalleryModal();
-        registerEventListeners();
-        console.log('[Quick Gallery] Extension setup complete');
     }
 
     /**
@@ -113,21 +125,21 @@
         `;
 
         document.body.appendChild(galleryModal);
+        
+        // Setup modal events
+        setupModalEvents();
     }
 
     /**
-     * Register event listeners
+     * Setup modal event listeners
      */
-    function registerEventListeners() {
-        // Close button
+    function setupModalEvents() {
         const closeBtn = galleryModal.querySelector('.quick-gallery-close');
         closeBtn.addEventListener('click', closeGallery);
 
-        // Overlay click to close
         const overlay = galleryModal.querySelector('.quick-gallery-overlay');
         overlay.addEventListener('click', closeGallery);
 
-        // Viewer controls
         const viewerClose = galleryModal.querySelector('.quick-gallery-viewer-close');
         viewerClose.addEventListener('click', closeViewer);
 
@@ -136,14 +148,24 @@
 
         const nextBtn = galleryModal.querySelector('.quick-gallery-nav-next');
         nextBtn.addEventListener('click', () => navigateImage(1));
+    }
 
+    /**
+     * Register event listeners
+     */
+    function registerEventListeners() {
         // Keyboard navigation
         document.addEventListener('keydown', handleKeyPress);
 
-        // Listen for character changes
-        if (window.eventSource) {
-            eventSource.on('chat_changed', loadCharacterGallery);
-            eventSource.on('character_edited', loadCharacterGallery);
+        // Listen for character changes using SillyTavern's event system
+        if (eventSource && eventSource.on) {
+            eventSource.on(event_types.CHAT_CHANGED, () => {
+                console.log('[Quick Gallery] Chat changed, refreshing gallery');
+            });
+            
+            eventSource.on(event_types.CHARACTER_EDITED, () => {
+                console.log('[Quick Gallery] Character edited, refreshing gallery');
+            });
         }
     }
 
@@ -182,46 +204,87 @@
      * Load images from character gallery
      */
     async function loadCharacterGallery() {
-        const context = SillyTavern.getContext();
         const grid = document.getElementById('quick-gallery-grid');
         const emptyState = galleryModal.querySelector('.quick-gallery-empty');
         
         grid.innerHTML = '';
         currentImages = [];
 
-        if (!context.characterId && !context.groupId) {
+        if (!context || (!context.characterId && !context.groupId)) {
             emptyState.style.display = 'flex';
             return;
         }
 
         try {
-            // Get character/group folder
             const char = context.characters[context.characterId];
-            if (!char) {
+            if (!char || !char.avatar) {
                 emptyState.style.display = 'flex';
                 return;
             }
 
-            // Fetch gallery images from character folder
-            const response = await fetch('/api/images/character?name=' + encodeURIComponent(char.name));
+            // Extract character name from avatar path
+            // Avatar format is typically: characters/CharacterName/avatar.png
+            const avatarPath = char.avatar;
+            const charNameMatch = avatarPath.match(/characters\/([^\/]+)\//);
             
-            if (response.ok) {
-                const images = await response.json();
+            if (!charNameMatch) {
+                console.error('[Quick Gallery] Could not extract character name from avatar path');
+                emptyState.style.display = 'flex';
+                return;
+            }
+
+            const charName = charNameMatch[1];
+            console.log('[Quick Gallery] Loading gallery for character:', charName);
+
+            // Try to fetch images using SillyTavern's API
+            const response = await fetch(`/api/characters/get?name=${encodeURIComponent(charName)}`);
+            
+            if (!response.ok) {
+                throw new Error(`Failed to fetch character data: ${response.status}`);
+            }
+
+            const charData = await response.json();
+            
+            // Look for gallery data in character extensions
+            if (charData.data && charData.data.extensions && charData.data.extensions.gallery) {
+                const gallery = charData.data.extensions.gallery;
                 
-                if (images && images.length > 0) {
-                    currentImages = images;
-                    emptyState.style.display = 'none';
-                    
-                    images.forEach((img, index) => {
-                        const imgCard = document.createElement('div');
-                        imgCard.className = 'quick-gallery-item';
-                        imgCard.innerHTML = `<img src="${img}" alt="Gallery image ${index + 1}" loading="lazy">`;
-                        imgCard.addEventListener('click', () => openViewer(index));
-                        grid.appendChild(imgCard);
+                if (Array.isArray(gallery) && gallery.length > 0) {
+                    currentImages = gallery.map(img => {
+                        // Convert to full path if needed
+                        if (img.startsWith('http')) {
+                            return img;
+                        } else if (img.startsWith('characters/')) {
+                            return `/${img}`;
+                        } else {
+                            return `/characters/${charName}/${img}`;
+                        }
                     });
-                } else {
-                    emptyState.style.display = 'flex';
                 }
+            }
+
+            // Display results
+            if (currentImages.length > 0) {
+                emptyState.style.display = 'none';
+                
+                currentImages.forEach((img, index) => {
+                    const imgCard = document.createElement('div');
+                    imgCard.className = 'quick-gallery-item';
+                    
+                    const imgEl = document.createElement('img');
+                    imgEl.src = img;
+                    imgEl.alt = `Gallery image ${index + 1}`;
+                    imgEl.loading = 'lazy';
+                    
+                    imgEl.onerror = function() {
+                        console.error('[Quick Gallery] Failed to load image:', img);
+                        imgCard.style.display = 'none';
+                    };
+                    
+                    imgCard.appendChild(imgEl);
+                    imgCard.addEventListener('click', () => openViewer(index));
+                    grid.appendChild(imgCard);
+                });
             } else {
                 emptyState.style.display = 'flex';
             }
@@ -270,7 +333,4 @@
 
         openViewer(newIndex);
     }
-
-    // Initialize the extension
-    init();
 })();
