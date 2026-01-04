@@ -1,10 +1,10 @@
 {
-    "display_name": "Quick Gallery",
+    "display_name": "Mobile Gallery",
     "loading_order": 50,
     "requires": [],
     "optional": [],
     "js": "index.js",
-    "css": "extension.css",
+    "css": "style.css",
     "author": "J7CKP0T",
     "version": "1.0.0",
     "homePage": "https://github.com/J7CKP0T/QuickGalleryExtension-Mobile",
