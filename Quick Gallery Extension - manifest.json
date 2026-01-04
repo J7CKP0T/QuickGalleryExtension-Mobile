@@ -4,7 +4,7 @@
     "requires": [],
     "optional": [],
     "js": "index.js",
-    "css": "style.css",
+    "css": "extension.css",
     "author": "J7CKP0T",
     "version": "1.0.0",
     "homePage": "https://github.com/J7CKP0T/QuickGalleryExtension-Mobile",
